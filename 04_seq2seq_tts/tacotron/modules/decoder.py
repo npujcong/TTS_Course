@@ -262,15 +262,25 @@ class TacotronDecoder(BasicAttentionDecoder):
             scope='stop_token_projection')
 
     def build_rnn_cell(self, memory, memory_length):
-        return BasicTacoDecoderCell(prenet=self.prenet,
-                                    rnn_cell=self.decoder_rnn,
-                                    attention_mechanism=self.attention_mechanism,
-                                    output_projection=self.output_projection,
-                                    stop_token_projection=self.stop_token_projection,
-                                    memory=memory,
-                                    decoder_rnn_init_state=self.decoder_rnn_init_state,
-                                    rnn_auxiliary_feature=self.rnn_auxiliary_feature,
-                                    name='TacoLSADecoderCell')
+        # return BasicTacoDecoderCell(prenet=self.prenet,
+        #                             rnn_cell=self.decoder_rnn,
+        #                             attention_mechanism=self.attention_mechanism,
+        #                             output_projection=self.output_projection,
+        #                             stop_token_projection=self.stop_token_projection,
+        #                             memory=memory,
+        #                             decoder_rnn_init_state=self.decoder_rnn_init_state,
+        #                             rnn_auxiliary_feature=self.rnn_auxiliary_feature,
+        #                             name='TacoLSADecoderCell')
+
+        return  GMMTacoDecoderCell(prenet=self.prenet,
+                                   rnn_cell=self.decoder_rnn,
+                                   memory=memory,
+                                   memory_length=memory_length,
+                                   output_projection=self.output_projection,
+                                   stop_token_projection=self.stop_token_projection,
+                                   decoder_rnn_init_state=self.decoder_rnn_init_state,
+                                   rnn_auxiliary_feature=self.rnn_auxiliary_feature,
+                                   name="TacoGMMDecoderCell")
 
 
     def __call__(self, memory, memory_length, hparams=None, targets=None,

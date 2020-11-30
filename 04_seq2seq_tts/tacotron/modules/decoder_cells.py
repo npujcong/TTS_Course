@@ -46,7 +46,6 @@ class BasicTacoDecoderCell(RNNCell):
         self.decoder_rnn_init_state = decoder_rnn_init_state
         self.rnn_auxiliary_feature= rnn_auxiliary_feature
         self.attention_layer_size = self.memory.get_shape()[-1].value
-        self.name_scope = name
         self.encoder_length = tf.shape(self.memory)[1]
 
         self.get_init_cell_state()
@@ -61,7 +60,7 @@ class BasicTacoDecoderCell(RNNCell):
         
 
     def get_init_cell_state(self):
-        with tf.name_scope(self.name_scope, "CellInit"):
+        with tf.name_scope(self.name, "CellInit"):
             if self.decoder_rnn_init_state is None:
                 self.decoder_rnn_init_state = None
             else:
@@ -151,3 +150,109 @@ class BasicTacoDecoderCell(RNNCell):
 
         return (cell_outputs, stop_tokens), next_state
 
+
+class GMMTacoDecoderCellState(
+    collections.namedtuple("BasicTacoDecoderCellState",
+                          ("rnn_cell_state", "attention", "time", "mu",
+                           "alignment_history"))):
+    def replace(self, **kwargs):
+        return super(GMMTacoDecoderCellState, self)._replace(**kwargs)
+
+class GMMTacoDecoderCell(BasicTacoDecoderCell):
+    """RNN cell for GMM attention based decoder"""
+
+    def __init__(self,
+                 prenet,
+                 rnn_cell,
+                 memory,
+                 memory_length,
+                 output_projection,
+                 stop_token_projection,
+                 num_gmm_mixture=5,
+                 decoder_rnn_init_state=None,
+                 rnn_auxiliary_feature=None,
+                 attention_mechanism=None,
+                 name="TacoGMMDecoderCell"):
+        self.num_gmm_mixture = num_gmm_mixture
+        self.memory_length = memory_length
+        BasicTacoDecoderCell.__init__(self,
+                                      prenet=prenet,
+                                      rnn_cell=rnn_cell,
+                                      attention_mechanism=attention_mechanism,
+                                      memory=memory,
+                                      output_projection=output_projection,
+                                      stop_token_projection=stop_token_projection,
+                                      decoder_rnn_init_state=decoder_rnn_init_state,
+                                      rnn_auxiliary_feature=rnn_auxiliary_feature,
+                                      name=name)
+
+    def get_attention_computer(self):
+        # GMM attention doesn't need attention_mechanism
+        return GMMAttentionComputer(
+            memory=self.memory,
+            input_length=self.memory_length,
+            num_mixture=self.num_gmm_mixture)
+
+    @property
+    def state_size(self):
+        return GMMTacoDecoderCellState(
+            rnn_cell_state=self.rnn_cell._cell.state_size,
+            time=tensor_shape.TensorShape([]),
+            attention=self.attention_layer_size,
+            mu=self.num_gmm_mixture,
+            alignment_history=())
+
+    def zero_state(self, batch_size, dtype):
+        # For GMM attention, we only need attention_computer
+        assert (self.attention_mechanism is None)
+        with ops.name_scope(type(self).__name__ + "ZeroState", values=[batch_size]):
+            if self.decoder_rnn_init_state is not None:
+                rnn_cell_state = self.decoder_rnn_init_state
+            else:
+                rnn_cell_state = self.rnn_cell._cell.zero_state(batch_size, dtype)
+
+            with ops.control_dependencies(self.check_batch_size(batch_size)):
+                rnn_cell_state = nest.map_structure(
+                    lambda s: array_ops.identity(s, name="checked_rnn_cell_state"),
+                    rnn_cell_state)
+
+            return GMMTacoDecoderCellState(
+                rnn_cell_state=rnn_cell_state,
+                time=array_ops.zeros([], dtype=tf.int32),
+                attention=rnn_cell_impl._zero_state_tensors(
+                    self.attention_layer_size, batch_size, dtype),
+                mu=rnn_cell_impl._zero_state_tensors(
+                    self.num_gmm_mixture, batch_size, dtype),
+                alignment_history=tensor_array_ops.TensorArray(
+                    dtype=dtype,
+                    size=0,
+                    dynamic_size=True))
+
+    def __call__(self, inputs, state):
+        previous_alignment_history = state.alignment_history
+        prenet_output = self.prenet(inputs)
+
+        rnn_input = tf.concat([prenet_output, state.attention], axis=-1)
+        if self.rnn_auxiliary_feature != None:
+            rnn_input = tf.concat([rnn_input, self.rnn_auxiliary_feature], axis=-1)
+        rnn_output, next_rnn_cell_state = self.rnn_cell(rnn_input, state.rnn_cell_state)
+
+        context_vector, alignments, mu = self.attention_computer(rnn_output, state.mu)
+
+        # projections
+        projections_input = tf.concat([rnn_output, context_vector], axis=-1)
+
+        cell_outputs = self.output_projection(projections_input)
+        stop_tokens = self.stop_token_projection(projections_input)
+
+        alignment_history = previous_alignment_history.write(
+            state.time, alignments)
+
+        next_state = GMMTacoDecoderCellState(
+            time=state.time + 1,
+            rnn_cell_state=next_rnn_cell_state,
+            attention=context_vector,
+            mu=mu,
+            alignment_history=alignment_history)
+
+        return (cell_outputs, stop_tokens), next_state

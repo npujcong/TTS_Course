@@ -1,3 +1,4 @@
+from modules.encoder import CBHGEncoder
 from modules.decoder import *
 from modules.layers import *
 from modules.ops import *
@@ -66,7 +67,7 @@ class BaseAcousticModel(object):
 
     def build_encoder(self, encoder_auxiliary_feature=None):
         hparams = self.hparams
-        raise NotImplementedError("Homework: implement the CBHG encoder.")
+        return CBHGEncoder(scope="CBHGEncoder", is_training=self.is_training)
 
     def build_decoder(self,
                     attention_mechanism,
